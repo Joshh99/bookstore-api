@@ -6,13 +6,13 @@ WORKDIR /app
 
 # Set Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PORT=80
 
 # Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
-    default-libmysqlclient-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* 
 
@@ -29,8 +29,8 @@ RUN adduser --disabled-password --gecos "" appuser && \
     chown -R appuser:appuser /app
 USER appuser
 
-# Expose port 3000 for customer service
+# Expose port 80 for Web BFF service
 EXPOSE 80
 
 # Command to run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80"]
