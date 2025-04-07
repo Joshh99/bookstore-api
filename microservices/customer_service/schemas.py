@@ -2,9 +2,8 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 
 class CustomerBase(BaseModel):
-    userId: str
+    userId: EmailStr
     name: str
-    email: str
     address: str
     address2: Optional[str] = None
     city: str

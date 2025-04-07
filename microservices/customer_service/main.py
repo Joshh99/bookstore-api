@@ -3,6 +3,7 @@ import uvicorn
 from fastapi import FastAPI, Depends, HTTPException, Response, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy import Column, String, Integer
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -14,16 +15,17 @@ from database import Base, engine, get_db
 from schemas import CustomerCreate, CustomerResponse
 
 # Create tables
-Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine, checkfirst=True)
 
 # Define SQLAlchemy model
 class Customer(Base):
     __tablename__ = "customers"
+    __table_args__ = {'extend_existing': True}  # This will prevent the duplicate table definition error
+
 
     id = Column(Integer, primary_key=True, index=True)
     userId = Column(String(50), unique=True, index=True, nullable=False)
     name = Column(String(100), nullable=False)
-    email = Column(String(100), unique=True, nullable=False)
     address = Column(String(200))
     address2 = Column(String(200))
     city = Column(String(50))
@@ -42,87 +44,95 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# JWT utility functions
-def decode_jwt_payload(token: str):
-    try:
-        parts = token.split('.')
-        if len(parts) != 3:
-            return None
+# # JWT utility functions
+# def decode_jwt_payload(token: str):
+#     try:
+#         parts = token.split('.')
+#         if len(parts) != 3:
+#             return None
         
-        payload_base64 = parts[1]
-        payload_base64 += '=' * ((4 - len(payload_base64) % 4) % 4)
+#         payload_base64 = parts[1]
+#         payload_base64 += '=' * ((4 - len(payload_base64) % 4) % 4)
         
-        payload_bytes = base64.urlsafe_b64decode(payload_base64)
-        return json.loads(payload_bytes.decode('utf-8'))
-    except Exception:
-        return None
+#         payload_bytes = base64.urlsafe_b64decode(payload_base64)
+#         return json.loads(payload_bytes.decode('utf-8'))
+#     except Exception:
+#         return None
 
-def validate_jwt_payload(payload):
-    if not payload or not isinstance(payload, dict):
-        return False, "Invalid token format"
+# def validate_jwt_payload(payload):
+#     if not payload or not isinstance(payload, dict):
+#         return False, "Invalid token format"
     
-    valid_subjects = ["starlord", "gamora", "drax", "rocket", "groot"]
-    if "sub" not in payload or payload["sub"] not in valid_subjects:
-        return False, "Invalid subject in token"
+#     valid_subjects = ["starlord", "gamora", "drax", "rocket", "groot"]
+#     if "sub" not in payload or payload["sub"] not in valid_subjects:
+#         return False, "Invalid subject in token"
     
-    if "exp" not in payload or not isinstance(payload["exp"], (int, float)):
-        return False, "Missing or invalid expiration in token"
+#     if "exp" not in payload or not isinstance(payload["exp"], (int, float)):
+#         return False, "Missing or invalid expiration in token"
     
-    current_time = time.time()
-    if payload["exp"] <= current_time:
-        return False, "Token has expired"
+#     current_time = time.time()
+#     if payload["exp"] <= current_time:
+#         return False, "Token has expired"
     
-    if "iss" not in payload or payload["iss"] != "cmu.edu":
-        return False, "Invalid issuer in token"
+#     if "iss" not in payload or payload["iss"] != "cmu.edu":
+#         return False, "Invalid issuer in token"
     
-    return True, "Valid token"
+#     return True, "Valid token"
 
-# JWT Middleware
-@app.middleware("http")
-async def jwt_validation_middleware(request: Request, call_next):
-    # Always allow status endpoint
-    if request.url.path == "/status":
-        return await call_next(request)
+# # JWT Middleware
+# @app.middleware("http")
+# async def jwt_validation_middleware(request: Request, call_next):
+#     # Always allow status endpoint
+#     if request.url.path == "/status":
+#         return await call_next(request)
     
-    # Validate X-Client-Type header
-    client_type = request.headers.get("X-Client-Type")
-    if not client_type:
-        return JSONResponse(
-            status_code=400,
-            content={"message": "Missing X-Client-Type header"}
-        )
+#     # Validate X-Client-Type header
+#     client_type = request.headers.get("X-Client-Type")
+#     if not client_type:
+#         return JSONResponse(
+#             status_code=400,
+#             content={"message": "Missing X-Client-Type header"}
+#         )
     
-    # Validate client type
-    valid_client_types = ["Web", "iOS", "Android"]
-    if client_type not in valid_client_types:
-        return JSONResponse(
-            status_code=400,
-            content={"message": f"Invalid X-Client-Type. Must be one of {valid_client_types}"}
-        )
+#     # Validate client type
+#     valid_client_types = ["Web", "iOS", "Android"]
+#     if client_type not in valid_client_types:
+#         return JSONResponse(
+#             status_code=400,
+#             content={"message": f"Invalid X-Client-Type. Must be one of {valid_client_types}"}
+#         )
     
-    # Validate Authorization header
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return JSONResponse(
-            status_code=401,
-            content={"message": "Missing or invalid Authorization header"}
-        )
+#     # Validate Authorization header
+#     auth_header = request.headers.get("Authorization")
+#     if not auth_header or not auth_header.startswith("Bearer "):
+#         return JSONResponse(
+#             status_code=401,
+#             content={"message": "Missing or invalid Authorization header"}
+#         )
     
-    # Extract and decode token
-    token = auth_header.replace("Bearer ", "")
-    payload = decode_jwt_payload(token)
+#     # Extract and decode token
+#     token = auth_header.replace("Bearer ", "")
+#     payload = decode_jwt_payload(token)
     
-    # Validate token payload
-    is_valid, message = validate_jwt_payload(payload)
-    if not is_valid:
-        return JSONResponse(
-            status_code=401,
-            content={"message": message}
-        )
+#     # Validate token payload
+#     is_valid, message = validate_jwt_payload(payload)
+#     if not is_valid:
+#         return JSONResponse(
+#             status_code=401,
+#             content={"message": message}
+#         )
     
-    # Continue processing the request
-    response = await call_next(request)
-    return response
+#     # Continue processing the request
+#     response = await call_next(request)
+#     return response
+
+# Overwrite 422 error with 400
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=400,
+        content={"message": exc.errors()},
+    )
 
 # Service functions
 def create_customer(db: Session, customer: CustomerCreate):
@@ -131,16 +141,12 @@ def create_customer(db: Session, customer: CustomerCreate):
     if db_customer:
         raise HTTPException(status_code=422, detail="This user ID already exists in the system.")
     
-    # Check if a customer with the same email already exists
-    db_customer_email = db.query(Customer).filter(Customer.email == customer.email).first()
-    if db_customer_email:
-        raise HTTPException(status_code=422, detail="This email already exists in the system.")
+    
     
     # Create a new Customer object
     new_customer = Customer(
         userId=customer.userId,
         name=customer.name,
-        email=customer.email,
         phone=customer.phone,
         address=customer.address,
         address2=customer.address2,
