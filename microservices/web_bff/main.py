@@ -5,13 +5,19 @@ from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Optional, Union, Any
+from dotenv import load_dotenv
+from urllib.parse import urljoin
+from urllib.parse import urlparse
 
-import traceback
 
 from utils import decode_jwt_payload, validate_jwt_payload
 
-# Get backend URL from environment variable
-BACKEND_BASE_URL = os.getenv("BACKEND_URL", "http://localhost:3000")
+# Load env vars from multiple possible locations
+load_dotenv()  # First try the current directory
+BACKEND_BASE_URL = os.getenv("BACKEND_URL", "")
+
+if BACKEND_BASE_URL.startswith('"') and BACKEND_BASE_URL.endswith('"'):
+    BACKEND_BASE_URL = BACKEND_BASE_URL[1:-1]
 
 app = FastAPI(title="Web BFF Service")
 
@@ -148,50 +154,62 @@ async def proxy_request(path: str, method: str, body: Dict = None):
         method: HTTP method (GET, POST, PUT, DELETE)
         body: Request body for POST/PUT requests
     """
-    backend_url = f"{BACKEND_BASE_URL}/{path}"
+    from urllib.parse import urljoin
+    
+    # Ensure path doesn't start with a slash if urljoin is used
+    if path.startswith('/'):
+        path = path[1:]
+    
+    backend_url = urljoin(BACKEND_BASE_URL, path)
+    print(f"Making {method} request to: {backend_url}")  # Debug the final URL
     
     # Call backend service
     async with httpx.AsyncClient() as client:
-        # try:
-        headers = {"X-Client-Type": "Internal"}
-        
-        if method == "GET":
-            response = await client.get(backend_url, headers=headers)
-        elif method == "POST":
-            response = await client.post(backend_url, json=body, headers=headers)
-        elif method == "PUT":
-            response = await client.put(backend_url, json=body, headers=headers)
-        elif method == "DELETE":
-            response = await client.delete(backend_url, headers=headers)
-        else:
-            return JSONResponse(
-                status_code=400,
-                content={"message": f"Unsupported method: {method}"}
-            )
-        
-        # Handle non-2xx responses
-        if response.status_code >= 400:
-            return JSONResponse(
-                status_code=response.status_code,
-                content=response.json() if response.content else {"message": "Error from backend service"}
-            )
-        
-        # For web BFF, simply return the response as-is without any transformations
-        if response.headers.get("content-type") == "application/json":
-            return response.json()
-        else:
-            return Response(
-                content=response.content,
-                status_code=response.status_code,
-                headers=dict(response.headers)
-            )
+        try:
+            headers = {"X-Client-Type": "Internal"}
             
-        # except httpx.RequestError as e:
-        #     # traceback.print_exc(e)
-        #     return JSONResponse(
-        #         status_code=503,
-        #         content={"message": f"Error connecting to backend service: {str(e)}"}
-        #     )
+            if method == "GET":
+                response = await client.get(backend_url, headers=headers)
+            elif method == "POST":
+                response = await client.post(backend_url, json=body, headers=headers)
+            elif method == "PUT":
+                response = await client.put(backend_url, json=body, headers=headers)
+            elif method == "DELETE":
+                response = await client.delete(backend_url, headers=headers)
+            else:
+                return JSONResponse(
+                    status_code=400,
+                    content={"message": f"Unsupported method: {method}"}
+                )
+            
+            # Handle non-2xx responses
+            if response.status_code >= 400:
+                error_content = {"message": "Error from backend service"}
+                try:
+                    error_content = response.json()
+                except:
+                    pass
+                return JSONResponse(
+                    status_code=response.status_code,
+                    content=error_content
+                )
+            
+            # For web BFF, simply return the response as-is without any transformations
+            if response.headers.get("content-type") == "application/json":
+                return response.json()
+            else:
+                return Response(
+                    content=response.content,
+                    status_code=response.status_code,
+                    headers=dict(response.headers)
+                )
+                
+        except httpx.RequestError as e:
+            print(f"Error connecting to backend service: {str(e)}")
+            return JSONResponse(
+                status_code=503,
+                content={"message": f"Error connecting to backend service: {str(e)}"}
+            )
 
 if __name__ == "__main__":
     # Configure port from environment variable, default to 80

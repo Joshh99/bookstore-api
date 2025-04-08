@@ -6,12 +6,23 @@ from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Optional, Union, Any
+from dotenv import load_dotenv
+from urllib.parse import urljoin
+from urllib.parse import urlparse
 
 from utils import decode_jwt_payload, validate_jwt_payload, transform_book_response, filter_customer_response
 
+load_dotenv()
+load_dotenv(".env")
 # Get backend URL from environment variable
-BACKEND_BASE_URL = os.getenv("BACKEND_URL", "http://internal-bookstore-dev-InternalALB-1695951471.us-east-1.elb.amazonaws.com:3000")
+BACKEND_BASE_URL = os.getenv("BACKEND_URL", "")
 
+if BACKEND_BASE_URL.startswith('"') and BACKEND_BASE_URL.endswith('"'):
+    BACKEND_BASE_URL = BACKEND_BASE_URL[1:-1]
+
+# BACKEND_BASE_URL = os.getenv("BACKEND_URL", "http://localhost:3000")
+
+print("Backend base url:", BACKEND_BASE_URL)
 app = FastAPI(title="Mobile BFF Service")
 
 # CORS Configuration
@@ -73,22 +84,13 @@ async def jwt_validation_middleware(request: Request, call_next):
     response = await call_next(request)
     return response
 
-# Status endpoint for health checks
-@app.get("/status")
-def status():
-    """
-    Health check endpoint for the Mobile BFF service.
-    """
-    return {"status": "OK"}
-
-# Book Service Proxy Endpoints
 @app.get("/books/isbn/{isbn}")
 async def get_book_by_isbn(isbn: str, request: Request):
     """
     Proxy to Book service with mobile-specific transformations.
     Replaces 'non-fiction' genre with '3'.
     """
-    return await proxy_book_request(isbn, request.url.path)
+    return await proxy_request(f"books/isbn/{isbn}", "GET", transform_type="book")
 
 @app.get("/books/{isbn}")
 async def get_book(isbn: str, request: Request):
@@ -96,30 +98,31 @@ async def get_book(isbn: str, request: Request):
     Proxy to Book service with mobile-specific transformations.
     Replaces 'non-fiction' genre with '3'.
     """
-    return await proxy_book_request(isbn, request.url.path)
+    return await proxy_request(f"books/{isbn}", "GET", transform_type="book")
 
 @app.post("/books")
 async def create_book(request: Request):
     """
     Proxy POST request to Book service.
     """
-    return await proxy_generic_request("books", "POST", request)
+    body = await request.json()
+    return await proxy_request("books", "POST", body, transform_type="book")
 
 @app.put("/books/{isbn}")
 async def update_book(isbn: str, request: Request):
     """
     Proxy PUT request to Book service.
     """
-    return await proxy_generic_request(f"books/{isbn}", "PUT", request)
+    body = await request.json()
+    return await proxy_request(f"books/{isbn}", "PUT", body, transform_type="book")
 
-# Customer Service Proxy Endpoints
 @app.get("/customers/{id}")
 async def get_customer(id: str):
     """
     Proxy to Customer service with mobile-specific transformations.
     Removes address-related fields.
     """
-    return await proxy_customer_request(f"customers/{id}")
+    return await proxy_request(f"customers/{id}", "GET", transform_type="customer")
 
 @app.get("/customers")
 async def get_customer_by_userId(userId: Optional[str] = None):
@@ -130,157 +133,87 @@ async def get_customer_by_userId(userId: Optional[str] = None):
     if not userId:
         raise HTTPException(status_code=400, detail="Missing required query parameter 'userId'")
     
-    return await proxy_customer_request(f"customers?userId={userId}")
+    return await proxy_request(f"customers?userId={userId}", "GET", transform_type="customer")
 
 @app.post("/customers")
 async def create_customer(request: Request):
     """
     Proxy POST request to Customer service.
     """
-    return await proxy_generic_request("customers", "POST", request)
-
-# Helper functions for proxying requests
-async def proxy_book_request(isbn: str, request_path: str):
-    """
-    Proxy book requests to the backend book service and transform the response.
-    
-    Args:
-        isbn: The ISBN to look up
-        request_path: The original path from the client request
-    """
-    # Determine backend URL
-    backend_url = f"{BACKEND_BASE_URL}/books/{isbn}"
-    if "isbn" in request_path:
-        backend_url = f"{BACKEND_BASE_URL}/books/isbn/{isbn}"
-    
-    # Call backend service
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                backend_url,
-                headers={"X-Client-Type": "Internal"}
-            )
-            
-            # Handle non-200 responses
-            if response.status_code != 200:
-                return JSONResponse(
-                    status_code=response.status_code,
-                    content=response.json() if response.content else {"message": "Error from backend service"}
-                )
-            
-            # Get response data and transform for mobile
-            response_data = response.json()
-            transformed_data = transform_book_response(response_data)
-            
-            return transformed_data
-            
-        except httpx.RequestError as e:
-            return JSONResponse(
-                status_code=503,
-                content={"message": f"Error connecting to backend service: {str(e)}"}
-            )
-
-async def proxy_customer_request(path: str):
-    """
-    Proxy customer requests to the backend customer service and transform the response.
-    
-    Args:
-        path: The path for the backend request
-    """
-    backend_url = f"{BACKEND_BASE_URL}/{path}"
-    
-    # Call backend service
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(
-                backend_url,
-                headers={"X-Client-Type": "Internal"}
-            )
-            
-            # Handle non-200 responses
-            if response.status_code != 200:
-                return JSONResponse(
-                    status_code=response.status_code,
-                    content=response.json() if response.content else {"message": "Error from backend service"}
-                )
-            
-            # Get response data and filter for mobile
-            response_data = response.json()
-            filtered_data = filter_customer_response(response_data)
-            
-            return filtered_data
-            
-        except httpx.RequestError as e:
-            return JSONResponse(
-                status_code=503,
-                content={"message": f"Error connecting to backend service: {str(e)}"}
-            )
-
-async def proxy_generic_request(path: str, method: str, request: Request):
-    """
-    Generic proxy for POST, PUT, DELETE requests to backend services.
-    
-    Args:
-        path: The path for the backend request
-        method: HTTP method (POST, PUT, DELETE)
-        request: Original FastAPI request
-    """
-    backend_url = f"{BACKEND_BASE_URL}/{path}"
-    
-    # Get request body
     body = await request.json()
+    return await proxy_request("customers", "POST", body, transform_type="customer")
+
+# General proxy function for all backend requests
+async def proxy_request(path: str, method: str, body: Dict = None, transform_type: str = None):
+    """
+    Generic proxy for requests to backend services.
+    
+    Args:
+        path: The path for the backend request
+        method: HTTP method (GET, POST, PUT, DELETE)
+        body: Request body for POST/PUT requests
+        transform_type: Type of transformation to apply ("book" or "customer" or None)
+    """
+    # Ensure path doesn't start with a slash if urljoin is used
+    if path.startswith('/'):
+        path = path[1:]
+    
+    backend_url = urljoin(BACKEND_BASE_URL, path)
+    print(f"Making {method} request to: {backend_url}")  # Debug the final URL
     
     # Call backend service
     async with httpx.AsyncClient() as client:
         try:
-            if method == "POST":
-                response = await client.post(
-                    backend_url,
-                    json=body,
-                    headers={"X-Client-Type": "Internal"}
-                )
+            headers = {"X-Client-Type": "Internal"}
+            
+            if method == "GET":
+                response = await client.get(backend_url, headers=headers)
+            elif method == "POST":
+                response = await client.post(backend_url, json=body, headers=headers)
             elif method == "PUT":
-                response = await client.put(
-                    backend_url,
-                    json=body,
-                    headers={"X-Client-Type": "Internal"}
-                )
+                response = await client.put(backend_url, json=body, headers=headers)
             elif method == "DELETE":
-                response = await client.delete(
-                    backend_url,
-                    headers={"X-Client-Type": "Internal"}
-                )
+                response = await client.delete(backend_url, headers=headers)
             else:
                 return JSONResponse(
                     status_code=400,
                     content={"message": f"Unsupported method: {method}"}
                 )
             
-            # Handle responses
-            if response.status_code not in [200, 201, 204]:
+            # Handle non-2xx responses
+            if response.status_code >= 400:
+                error_content = {"message": "Error from backend service"}
+                try:
+                    error_content = response.json()
+                except:
+                    pass
                 return JSONResponse(
                     status_code=response.status_code,
-                    content=response.json() if response.content else {"message": "Error from backend service"}
+                    content=error_content
                 )
             
-            # Return response from backend (for POST and PUT)
-            if method in ["POST", "PUT"]:
+            # Process response based on transformation type
+            try:
                 response_data = response.json()
                 
-                # Apply transformations if necessary
-                if path.startswith("books"):
-                    transformed_data = transform_book_response(response_data)
-                    return transformed_data
-                elif path.startswith("customers"):
-                    filtered_data = filter_customer_response(response_data)
-                    return filtered_data
+                # Apply mobile-specific transformations
+                if transform_type == "book":
+                    return transform_book_response(response_data)
+                elif transform_type == "customer":
+                    print("Filtering customer data:", response_data)  # Debug
+                    return filter_customer_response(response_data)
+                else:
+                    return response_data
+            except ValueError:
+                # If not JSON, return as is
+                return Response(
+                    content=response.content,
+                    status_code=response.status_code,
+                    headers=dict(response.headers)
+                )
                 
-                return response_data
-            
-            # For DELETE, just return a success message
-            return {"message": "Resource deleted successfully"}
-            
         except httpx.RequestError as e:
+            print(f"Error connecting to backend service: {str(e)}")
             return JSONResponse(
                 status_code=503,
                 content={"message": f"Error connecting to backend service: {str(e)}"}
