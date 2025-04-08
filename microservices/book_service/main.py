@@ -15,11 +15,12 @@ from database import Base, engine, get_db
 from schemas import BookCreate, BookResponse
 
 # Create tables
-Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine, checkfirst=True)
 
 # Define SQLAlchemy model
 class Book(Base):
     __tablename__ = "books"
+    __table_args__ = {'extend_existing': True}  # This will prevent the duplicate table definition error
 
     ISBN = Column(String(20), primary_key=True, index=True)
     title = Column(String(255), nullable=False)
