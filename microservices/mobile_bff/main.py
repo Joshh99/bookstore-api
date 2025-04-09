@@ -49,25 +49,41 @@ async def jwt_validation_middleware(request: Request, call_next):
             content={"message": "Missing X-Client-Type header"}
         )
     
-    # Validate client type for mobile BFF
-    valid_client_types = ["iOS", "Android"]
-    if client_type not in valid_client_types:
+    # Validate client type for the appropriate BFF
+    if request.app.title == "Web BFF Service" and client_type != "Web":
         return JSONResponse(
             status_code=400,
-            content={"message": f"Invalid X-Client-Type. Must be one of {valid_client_types}"}
+            content={"message": "Invalid X-Client-Type. Must be 'Web'"}
+        )
+    elif request.app.title == "Mobile BFF Service" and client_type not in ["iOS", "Android"]:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Invalid X-Client-Type. Must be one of ['iOS', 'Android']"}
         )
     
     # Validate Authorization header
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    if not auth_header:
         return JSONResponse(
             status_code=401,
-            content={"message": "Missing or invalid Authorization header"}
+            content={"message": "Missing Authorization header"}
+        )
+    
+    if not auth_header.startswith("Bearer "):
+        return JSONResponse(
+            status_code=401,
+            content={"message": "Invalid Authorization header format. Must be 'Bearer <token>'"}
         )
     
     # Extract and decode token
     token = auth_header.replace("Bearer ", "")
     payload = decode_jwt_payload(token)
+    
+    if not payload:
+        return JSONResponse(
+            status_code=401,
+            content={"message": "Invalid JWT token format"}
+        )
     
     # Validate token payload
     is_valid, message = validate_jwt_payload(payload)
@@ -83,6 +99,10 @@ async def jwt_validation_middleware(request: Request, call_next):
     # Continue processing the request
     response = await call_next(request)
     return response
+
+@app.get("/status")
+async def status():
+    return {"status": "OK", "service": "mobile_bff"}
 
 @app.get("/books/isbn/{isbn}")
 async def get_book_by_isbn(isbn: str, request: Request):
